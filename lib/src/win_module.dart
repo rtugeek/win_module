@@ -6,10 +6,10 @@ import 'package:yaml/yaml.dart';
 
 import 'module.dart';
 
-
 class WinModule {
   String output = "dist/";
   String target = "exe";
+  String changelog = "";
   Pubspec? _pubspec;
 
   Pubspec get pubspec {
@@ -27,13 +27,20 @@ class WinModule {
   }
 
   void readYaml() {
-    var moduleYaml = loadYaml(File("modules.yaml").readAsStringSync());
+    var modulesYaml = File("modules.yaml");
+    if (!modulesYaml.existsSync()) {
+      return;
+    }
+    var moduleYaml = loadYaml(modulesYaml.readAsStringSync());
     target = moduleYaml["target"] ?? "exe";
     output = moduleYaml["output"] ?? "dist/";
-    var modulesJson = moduleYaml["modules"] as List<dynamic>;
-    modulesJson.forEach((element) {
-      modules.add(Module(element["name"], element["path"]));
-    });
+    changelog = moduleYaml["changelog"] ?? "";
+    if (moduleYaml["modules"] != null) {
+      var modulesJson = moduleYaml["modules"] as List<dynamic>;
+      modulesJson.forEach((element) {
+        modules.add(Module(element["name"], element["path"]));
+      });
+    }
   }
 
   /// 更新Runner.rc版本号，与pubspec一致
@@ -42,8 +49,8 @@ class WinModule {
     var minor = pubspec.version!.minor;
     var patch = pubspec.version!.patch;
     var runnerFile = File("windows/runner/Runner.rc");
-    var versionNumberReg = RegExp(r'VERSION_AS_NUMBER \d,\d,\d');
-    var versionStringReg = RegExp(r'VERSION_AS_STRING "\d.\d.\d"');
+    var versionNumberReg = RegExp(r'VERSION_AS_NUMBER \d+,\d+,\d+');
+    var versionStringReg = RegExp(r'VERSION_AS_STRING "\d+.\d+.\d+"');
     var runnerStr = runnerFile.readAsStringSync();
     runnerStr = runnerStr.replaceFirst(
         versionNumberReg, "VERSION_AS_NUMBER $major,$minor,$patch");
@@ -54,10 +61,16 @@ class WinModule {
   }
 
   String getArtifactName() {
-    return "/${pubspec.name.pascalCase}-${getVersionString()}.$target";
+    return "${pubspec.name.pascalCase}-${getVersionString()}.$target";
   }
 
   String getVersionString() {
     return "${pubspec.version!.major}.${pubspec.version!.minor}.${pubspec.version!.patch}";
+  }
+
+  String? getBuildCode() {
+    return pubspec.version!.build.isEmpty
+        ? null
+        : pubspec.version!.build.first.toString();
   }
 }

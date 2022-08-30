@@ -8,7 +8,11 @@ extension StringExt on String {
   }
 
   logRed() {
-    logger.info(Colorize(this).blue());
+    logger.info(Colorize(this).red());
+  }
+
+  logYellow() {
+    logger.info(Colorize(this).yellow());
   }
 
   logGreen() {
