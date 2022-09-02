@@ -1,26 +1,24 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:app_package_maker/app_package_maker.dart';
 import 'package:args/command_runner.dart';
 import 'package:colorize/colorize.dart';
 import 'package:flutter_app_builder/flutter_app_builder.dart';
-import 'package:flutter_app_packager/flutter_app_packager.dart';
 import 'package:recase/recase.dart';
+import 'package:win_module/src/build_mode.dart';
 import 'package:win_module/win_module.dart';
 
 import 'app_version.dart';
 import 'ext.dart';
 import 'git.dart';
 import 'main.dart';
-import 'build_mode.dart';
 
 class CommandBuild extends Command {
   final WinModule winModule;
 
   CommandBuild(this.winModule) {
-    argParser.addOption('mode', valueHelp: 'release or debug');
     argParser.addOption('version', valueHelp: '');
+    argParser.addOption('job', valueHelp: '');
     argParser.addFlag('force', help: 'If set will force override version');
     argParser.addFlag('publish', help: 'if set will publish to haihaihai.vip');
   }
@@ -30,129 +28,114 @@ class CommandBuild extends Command {
 
   @override
   String get description => 'build modules';
-  var parentBuildDir = Directory("build/windows/runner/Debug/");
+  var winRootBuildDir = Directory("build/windows/runner/Debug/");
+  var androidApkFile = File("build/app/outputs/flutter-apk/app-release.apk");
 
   @override
   Future run() async {
-    String mode = argResults?['mode'] ?? 'debug';
-    var buildMode = BuildMode.Debug;
-    if (BuildMode.Release.name.toLowerCase() == mode.toLowerCase()) {
-      buildMode = BuildMode.Release;
-    } else if (BuildMode.Profile.name.toLowerCase() == mode.toLowerCase()) {
-      buildMode = BuildMode.Profile;
-    }
-    "Build in: ${buildMode.name} mode, target:${winModule.target}".logBlue();
-    parentBuildDir = Directory("build/windows/runner/${buildMode.name}/");
+    String jobArg = argResults?['job'];
+    var job = winModule.jobs[jobArg]!;
+    var buildMode = job.mode;
+    "Build job: ${job.mode} mode, target:${job.target}".logBlue();
+    winRootBuildDir = Directory("build/windows/runner/${buildMode.name}/");
+    androidApkFile = File(
+        "build/app/outputs/flutter-apk/app-${buildMode.name.toLowerCase()}.apk");
     winModule.updateVersion();
+    if (job.platform == "windows") {
+      //编译子模块
+      for (var module in winModule.modules) {
+        if (!module.build) {
+          _copyFiles(Directory(module.path), winRootBuildDir);
+          continue;
+        }
+        var dir = Directory(module.path);
+        logger
+            .info(Colorize("=========================================").blue());
+        logger.info(Colorize("build module:${module.name}, dir:${dir.absolute}")
+            .blue());
 
-    //编译子模块
-    for (var module in winModule.modules) {
-      var dir = Directory(module.path);
-      logger.info(Colorize("=========================================").blue());
-      logger.info(
-          Colorize("build module:${module.name}, dir:${dir.absolute}").blue());
+        await _tempReplaceDartProjectName(module);
+        Process process = await Process.start('flutter',
+            ['build', 'windows', '--${buildMode.name.toLowerCase()}'],
+            runInShell: true, workingDirectory: dir.path);
+        process.stdout.listen((List<int> data) {
+          String message = utf8.decoder.convert(data).trim();
+          logger.info(Colorize(message).darkGray());
+        });
+        process.stderr.listen((List<int> data) {
+          String message = utf8.decoder.convert(data).trim();
+          logger.info(Colorize(message).red());
+        });
 
-      await _tempReplaceDartProjectName(module);
-      Process process = await Process.start(
-          'flutter', ['build', 'windows', '--${buildMode.name.toLowerCase()}'],
-          runInShell: true, workingDirectory: dir.path);
-      process.stdout.listen((List<int> data) {
-        String message = utf8.decoder.convert(data).trim();
-        logger.info(Colorize(message).darkGray());
-      });
-      process.stderr.listen((List<int> data) {
-        String message = utf8.decoder.convert(data).trim();
-        logger.info(Colorize(message).red());
-      });
-
-      int exitCode = await process.exitCode;
-      if (exitCode != 0) {
-        throw BuildError();
+        int exitCode = await process.exitCode;
+        if (exitCode != 0) {
+          throw BuildError();
+        }
+        await _restoreDartProjectName(module);
+        //复制文件到父模块
+        _copyModuleBuild(module, buildMode);
       }
-      await _restoreDartProjectName(module);
-      //复制文件到父模块
-      _copyModuleBuild(module, buildMode);
     }
+
     //编译父模块
     if (buildMode == BuildMode.Release) {
-      "Build root: ${winModule.getArtifactName()}";
-      Process process = await Process.start(
-          'flutter', ['build', 'windows', '--${buildMode.name.toLowerCase()}'],
-          runInShell: true);
-      process.stdout.listen((List<int> data) {
-        String message = utf8.decoder.convert(data).trim();
-        message.logDarkGray();
-      });
-      process.stderr.listen((List<int> data) {
-        String message = utf8.decoder.convert(data).trim();
-        message.logRed();
-      });
-
-      int exitCode = await process.exitCode;
-      if (exitCode != 0) {
-        throw BuildError();
-      }
-      var packager = FlutterAppPackager();
-      parentBuildDir.absolute.path.logBlue();
-      MakeResult result = await packager.package(parentBuildDir,
-          outputDirectory: Directory(winModule.output),
-          platform: "windows",
-          target: winModule.target,
-          makeArguments: {"artifact_name": winModule.getArtifactName()});
-      var outputFile = result.outputFile;
+      "Build root: ${winModule.getArtifactFileName()}";
+      var buildDir = await job.build();
+      var artifactFile = await job.package(
+          buildDir, Directory(winModule.output), job.getArtifactFileName());
       if (argResults!.wasParsed("publish")) {
         //复制文件
-        outputFile.copySync(
-            "../haihaihai/public/${winModule.pubspec.name}/${winModule.pubspec.name.pascalCase}.${winModule.target}");
+        var targetFile = File("../haihaihai/public/${winModule.pubspec.name}/${winModule.pubspec.name.pascalCase}.${job.target}");
+        if(!targetFile.existsSync()){
+          targetFile.createSync(recursive: true);
+        }
+        artifactFile.copySync(targetFile.path);
         var versionFile =
             File("../haihaihai/public/${winModule.pubspec.name}/versions.json");
         var versionJson = versionFile.readAsStringSync();
         var appVersions = AppVersions.fromJson(jsonDecode(versionJson));
-        if (winModule.target == "exe") {
+        if (job.target == "exe") {
           if (appVersions.win == null) appVersions.win = [];
-          _newPlatformVersion("win", appVersions.win!);
-        } else if (winModule.target == "apk") {
-          if (appVersions.win == null) appVersions.android = [];
-          _newPlatformVersion("android", appVersions.android!);
+          _newPlatformVersion("win", job.changelog, appVersions.win!);
+        } else if (job.target == "apk") {
+          if (appVersions.android == null) appVersions.android = [];
+          _newPlatformVersion("android", job.changelog, appVersions.android!);
         }
-        versionFile.writeAsStringSync(jsonEncode(appVersions));
-        //提交代码
-        // Process.start("git", ["commit","-m",""],workingDirectory: "../haihaihai/");
-        // await Git.addAll();
-        // await Git.commit(winModule.changelog);
-        // await Git.tag("V${winModule.getVersionString()}");
-        // "Git commit done!,Please run git push in haihaihai.vip manually"
-        //     .logYellow();
+        versionFile.writeAsStringSync(prettyJson(appVersions));
+        await Git.addAll();
       }
       "Done".logGreen();
     }
   }
 
-  _newPlatformVersion(
-      String platform, List<AppVersion> targetPlatformVersions) {
+  String prettyJson(dynamic json) {
+    var spaces = ' ' * 4;
+    var encoder = JsonEncoder.withIndent(spaces);
+    return encoder.convert(json);
+  }
+
+  _newPlatformVersion(String platform, String changelog,
+      List<AppVersion> targetPlatformVersions) {
     //生成版本信息
-    if (targetPlatformVersions == null) {
-      targetPlatformVersions = [];
-    } else {
-      for (var element in targetPlatformVersions) {
-        if (element.versionName == winModule.getVersionString()) {
-          if (argResults!.wasParsed("force")) {
-            targetPlatformVersions.remove(element);
-          } else {
-            "Publish error,version exists".logRed();
-            throw BuildError();
-          }
-          break;
+    for (var element in targetPlatformVersions) {
+      if (element.versionName == winModule.getVersionName()) {
+        if (argResults!.wasParsed("force")) {
+          targetPlatformVersions.remove(element);
+        } else {
+          "Publish error,version exists".logRed();
+          throw BuildError();
         }
+        break;
       }
     }
+
     var newVersion = AppVersion(
-        platform: "win",
+        platform: platform,
         appName: winModule.pubspec.name,
-        versionName: winModule.getVersionString(),
+        versionName: winModule.getVersionName(),
         releaseAt: DateTime.now().toString(),
-        desc: winModule.changelog,
-        versionCode: winModule.getBuildCode(),
+        desc: changelog,
+        versionCode: winModule.getVersionCode(),
         downloadLink: "https://haihaihai.vip");
     targetPlatformVersions.add(newVersion);
   }
@@ -180,10 +163,15 @@ class CommandBuild extends Command {
     }
     moduleDataDir.renameSync(newModuleDataDir.path);
     var parentBuildDir = Directory("build/windows/runner/$folderName/");
-    moduleBuildDir.listSync(recursive: true).forEach((element) {
+    _copyFiles(moduleBuildDir, parentBuildDir);
+  }
+
+  _copyFiles(Directory source, Directory target) {
+    "Copy file from:${source.path} to ${target.path}".logBlue();
+    source.listSync(recursive: true).forEach((element) {
       if (element is File) {
-        var targetFile = File(element.path
-            .replaceAll("${moduleBuildDir.path}", parentBuildDir.path));
+        var targetFile =
+            File(element.path.replaceAll("${source.path}", target.path));
         if (!targetFile.parent.existsSync()) {
           targetFile.parent.createSync(recursive: true);
         }
@@ -193,10 +181,10 @@ class CommandBuild extends Command {
           } else {
             "Delete exists file:${targetFile.path}".logYellow();
             targetFile.deleteSync(recursive: true);
-            element.renameSync(targetFile.path);
+            element.copySync(targetFile.path);
           }
         } else {
-          element.renameSync(targetFile.path);
+          element.copySync(targetFile.path);
         }
       }
     });

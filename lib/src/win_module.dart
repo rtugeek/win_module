@@ -1,16 +1,18 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:colorize/colorize.dart';
 import 'package:pubspec_parse/pubspec_parse.dart';
 import 'package:recase/recase.dart';
+import 'package:win_module/src/job.dart';
 import 'package:yaml/yaml.dart';
 
 import 'module.dart';
 
 class WinModule {
   String output = "dist/";
-  String target = "exe";
-  String changelog = "";
   Pubspec? _pubspec;
+  Map<String, Job> jobs = {};
 
   Pubspec get pubspec {
     if (_pubspec == null) {
@@ -23,22 +25,31 @@ class WinModule {
   List<Module> modules = [];
 
   WinModule() {
-    readYaml();
+    readBuildJson();
   }
 
-  void readYaml() {
-    var modulesYaml = File("modules.yaml");
-    if (!modulesYaml.existsSync()) {
+  void readBuildJson() {
+    var buildJson = File("build.json");
+    if (!buildJson.existsSync()) {
       return;
     }
-    var moduleYaml = loadYaml(modulesYaml.readAsStringSync());
-    target = moduleYaml["target"] ?? "exe";
-    output = moduleYaml["output"] ?? "dist/";
-    changelog = moduleYaml["changelog"] ?? "";
-    if (moduleYaml["modules"] != null) {
-      var modulesJson = moduleYaml["modules"] as List<dynamic>;
+    var json = jsonDecode(buildJson.readAsStringSync());
+    var jobs = json["jobs"] as Map<String, dynamic>;
+    if (jobs.isNotEmpty) {
+      jobs.forEach((key, value) {
+        print("Job:$key found");
+        var job = Job.fromJson(value);
+        job.versionName = getVersionName();
+        job.versionCode = getVersionCode() ?? "";
+        job.projectName = pubspec.name;
+        this.jobs[key] = job;
+      });
+    }
+    output = json["output"] ?? "dist/";
+    if (json["modules"] != null) {
+      var modulesJson = json["modules"] as List<dynamic>;
       modulesJson.forEach((element) {
-        modules.add(Module(element["name"], element["path"]));
+        modules.add(Module(element["name"], element["path"], element["build"]));
       });
     }
   }
@@ -48,27 +59,47 @@ class WinModule {
     var major = pubspec.version!.major;
     var minor = pubspec.version!.minor;
     var patch = pubspec.version!.patch;
+    var versionStr = getVersionName();
+    var buildNumber = getVersionCode();
+    print(Colorize("Update version:$versionStr+$buildNumber ").blue());
     var runnerFile = File("windows/runner/Runner.rc");
-    var versionNumberReg = RegExp(r'VERSION_AS_NUMBER \d+,\d+,\d+');
-    var versionStringReg = RegExp(r'VERSION_AS_STRING "\d+.\d+.\d+"');
-    var runnerStr = runnerFile.readAsStringSync();
-    runnerStr = runnerStr.replaceFirst(
-        versionNumberReg, "VERSION_AS_NUMBER $major,$minor,$patch");
-    runnerStr = runnerStr.replaceFirst(
-        versionStringReg, 'VERSION_AS_STRING "$major.$minor.$patch"');
+    if (runnerFile.existsSync()) {
+      var versionNumberReg = RegExp(r'VERSION_AS_NUMBER \d+,\d+,\d+');
+      var versionStringReg = RegExp(r'VERSION_AS_STRING "\d+.\d+.\d+"');
+      var runnerStr = runnerFile.readAsStringSync();
+      runnerStr = runnerStr.replaceFirst(
+          versionNumberReg, "VERSION_AS_NUMBER $major,$minor,$patch");
+      runnerStr = runnerStr.replaceFirst(
+          versionStringReg, 'VERSION_AS_STRING "$major.$minor.$patch"');
 
-    runnerFile.writeAsStringSync(runnerStr);
+      runnerFile.writeAsStringSync(runnerStr);
+    }
+
+    //替换安卓版本
+    var buildGradleFile = File("android/app/build.gradle");
+    if (buildGradleFile.existsSync()) {
+      buildGradleFile.readAsStringSync();
+      var versionNumberReg = RegExp(r"flutterVersionCode = '\d+'");
+      var versionStringReg = RegExp(r"flutterVersionName = '\d.\d(.\d)?'");
+      var buildGradleStr = buildGradleFile.readAsStringSync();
+      buildGradleStr = buildGradleStr.replaceFirst(
+          versionNumberReg, "flutterVersionCode = '${getVersionCode()}'");
+      buildGradleStr = buildGradleStr.replaceFirst(
+          versionStringReg, "flutterVersionName = '$major.$minor.$patch'");
+
+      buildGradleFile.writeAsStringSync(buildGradleStr);
+    }
   }
 
-  String getArtifactName() {
-    return "${pubspec.name.pascalCase}-${getVersionString()}.$target";
+  String getArtifactFileName() {
+    return "${pubspec.name.pascalCase}-${getVersionName()}";
   }
 
-  String getVersionString() {
+  String getVersionName() {
     return "${pubspec.version!.major}.${pubspec.version!.minor}.${pubspec.version!.patch}";
   }
 
-  String? getBuildCode() {
+  String? getVersionCode() {
     return pubspec.version!.build.isEmpty
         ? null
         : pubspec.version!.build.first.toString();
