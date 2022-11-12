@@ -4,9 +4,9 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:colorize/colorize.dart';
 import 'package:flutter_app_builder/flutter_app_builder.dart';
+import 'package:haihaihai/src/build_mode.dart';
 import 'package:recase/recase.dart';
-import 'package:win_module/src/build_mode.dart';
-import 'package:win_module/win_module.dart';
+import 'package:haihaihai/haihaihai.dart';
 
 import 'app_version.dart';
 import 'ext.dart';
@@ -14,7 +14,7 @@ import 'git.dart';
 import 'main.dart';
 
 class CommandBuild extends Command {
-  final WinModule winModule;
+  final Haihaihai winModule;
 
   CommandBuild(this.winModule) {
     argParser.addOption('version', valueHelp: '');
@@ -45,7 +45,12 @@ class CommandBuild extends Command {
       //编译子模块
       for (var module in winModule.modules) {
         if (!module.build) {
-          _copyFiles(Directory(module.path), winRootBuildDir);
+          var outputDir = winRootBuildDir;
+          if (module.output != null) {
+            outputDir = Directory("${winRootBuildDir.path}${module.output}");
+          }
+          outputDir.path.logBlue();
+          _copyFiles(Directory(module.path), outputDir);
           continue;
         }
         var dir = Directory(module.path);
@@ -85,8 +90,9 @@ class CommandBuild extends Command {
           buildDir, Directory(winModule.output), job.getArtifactFileName());
       if (argResults!.wasParsed("publish")) {
         //复制文件
-        var targetFile = File("../haihaihai/public/${winModule.pubspec.name}/${winModule.pubspec.name.pascalCase}.${job.target}");
-        if(!targetFile.existsSync()){
+        var targetFile = File(
+            "../haihaihai/public/${winModule.pubspec.name}/${winModule.pubspec.name.pascalCase}.${job.target}");
+        if (!targetFile.existsSync()) {
           targetFile.createSync(recursive: true);
         }
         artifactFile.copySync(targetFile.path);
@@ -141,7 +147,7 @@ class CommandBuild extends Command {
   }
 
   /// 临时更换DartProject名称
-  _tempReplaceDartProjectName(Module module) async {
+  _tempReplaceDartProjectName(WinModule module) async {
     var mainCpp = File("${module.path}/windows/runner/main.cpp");
     var old = 'flutter::DartProject project(L"data");';
     var newName = 'flutter::DartProject project(L"${module.name}");';
@@ -149,15 +155,12 @@ class CommandBuild extends Command {
     mainCpp.writeAsStringSync(str);
   }
 
-  _copyModuleBuild(Module module, BuildMode mode) async {
+  _copyModuleBuild(WinModule module, BuildMode mode) async {
     var folderName = mode.name;
-    var moduleBuildDir =
-        Directory("${module.path}/build/windows/runner/$folderName/");
+    var moduleBuildDir = module.getBuildDirectory(mode);
     //将data目录重命名为子模块名
-    var moduleDataDir =
-        Directory("${module.path}/build/windows/runner/$folderName/data");
-    var newModuleDataDir = Directory(
-        "${module.path}/build/windows/runner/$folderName/${module.name}");
+    var moduleDataDir = module.getDataDirectory(mode);
+    var newModuleDataDir = module.getModuleDataDirectory(mode);
     if (newModuleDataDir.existsSync()) {
       newModuleDataDir.deleteSync(recursive: true);
     }
@@ -176,13 +179,18 @@ class CommandBuild extends Command {
           targetFile.parent.createSync(recursive: true);
         }
         if (targetFile.existsSync()) {
-          if (targetFile.path.endsWith(".dll")) {
-            "Skip exists DLL file:${targetFile.path}".logBlue();
-          } else {
-            "Delete exists file:${targetFile.path}".logYellow();
+          // if (targetFile.path.endsWith(".dll")) {
+          //   // element.lastModifiedSync()  > targetFile.lastModifiedSync()
+          //   "Skip exists DLL file:${targetFile.path}".logBlue();
+          // } else {
+          "Delete exists file:${targetFile.path}".logYellow();
+          try {
             targetFile.deleteSync(recursive: true);
             element.copySync(targetFile.path);
+          } catch (e) {
+            "Delete exists file failed:${targetFile.path}".logRed();
           }
+          // }
         } else {
           element.copySync(targetFile.path);
         }
@@ -190,7 +198,7 @@ class CommandBuild extends Command {
     });
   }
 
-  _restoreDartProjectName(Module module) async {
+  _restoreDartProjectName(WinModule module) async {
     var mainCpp = File("${module.path}/windows/runner/main.cpp");
     var old = 'flutter::DartProject project(L"data");';
     var newName = 'flutter::DartProject project(L"${module.name}");';

@@ -4,12 +4,12 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
-import 'package:win_module/win_module.dart';
+import 'package:haihaihai/haihaihai.dart';
 import 'package:yaml/yaml.dart';
 
 import 'command_build.dart';
 
-final logger = Logger("win_module")
+final logger = Logger("haihaihai")
   ..onRecord.listen((record) {
     print(record.message);
   });
@@ -22,8 +22,8 @@ final logger = Logger("win_module")
 //                 5.如果是release模式，再执行打包命令
 Future<void> main(List<String> args) async {
   Logger.root.level = Level.ALL;
-  var winModule = WinModule();
-  final runner = CommandRunner('win_module', '');
+  var haihaihai = Haihaihai();
+  final runner = CommandRunner('haihaihai', '');
   runner.argParser.addFlag(
     'version',
     negatable: false,
@@ -36,7 +36,7 @@ Future<void> main(List<String> args) async {
   );
 
   // runner.addCommand(CommandDoctor());
-  runner.addCommand(CommandBuild(winModule));
+  runner.addCommand(CommandBuild(haihaihai));
 
   ArgResults argResults = runner.parse(args);
 
@@ -47,7 +47,7 @@ Future<void> main(List<String> args) async {
       return;
     }
   } else if (argResults.wasParsed('update-version')) {
-    winModule.updateVersion();
+    haihaihai.updateVersion();
     return;
   }
   return runner.runCommand(argResults);

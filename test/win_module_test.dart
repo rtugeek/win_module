@@ -1,5 +1,4 @@
 
-import 'package:win_module/src/win_module.dart';
 
 void main() {
   // test('adds one to input values', () {

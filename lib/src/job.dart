@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:app_package_maker/app_package_maker.dart';
 import 'package:flutter_app_builder/flutter_app_builder.dart';
 import 'package:flutter_app_packager/flutter_app_packager.dart';
+import 'package:haihaihai/src/build_mode.dart';
 import 'package:recase/recase.dart';
-import 'package:win_module/src/build_mode.dart';
 
 class Job {
   String target = "exe";

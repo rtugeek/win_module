@@ -1,4 +1,4 @@
-name: win_module
+name: haihaihai
 description: A package to build multiple moudles into one release(exe,zip) in windows
 version: 1.0.0
 homepage: https://github.com/rtugeek/win_module
@@ -24,4 +24,4 @@ dependencies:
   recase: ^4.0.0
 dev_dependencies:
 executables:
-  win_module: main
+  haihaihai: main
